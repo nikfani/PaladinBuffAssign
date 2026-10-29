@@ -2,7 +2,7 @@
 ## Title: PaladinBuffAssign
 ## Notes: Assign buffs to paladins in group/raid via context menus on bars
 ## Author: Nikol
-## Version: 1.0.1
+## Version: 1.0.2
 ## SavedVariables: PaladinBuffAssignDB
 
 Libs\LibStub\LibStub.lua

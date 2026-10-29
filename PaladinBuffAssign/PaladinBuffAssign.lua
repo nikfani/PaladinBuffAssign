@@ -6,7 +6,7 @@
 local addonName = "PaladinBuffAssign"
 local PBA = {}
 _G[addonName] = PBA
-PBA.version = "3.4.1" -- 3.3.5a: dual-group inspect, GUID resolution, CanInspect
+PBA.version = "3.4.2" -- 3.3.5a: dual-group inspect, GUID resolution, CanInspect
 
 -- ==================== LOCALE ====================
 local L = {}
@@ -234,7 +234,6 @@ PBA.assignments = {}
 PBA.specCache = {}
 PBA._debugInspect = false
 PBA._lastRosterHash = nil
-local hasProt = false
 local gearFrame = nil
 local menuFrame = nil
 local announceBtn = nil
@@ -274,13 +273,6 @@ local function GetCachedSpec(unit)
 end
 
 -- ==================== ROSTER ====================
-function PBA:RecalcHasProt()
-    hasProt = false
-    for _, p in pairs(PBA.paladins) do
-        if p.spec == "Protection" then hasProt = true; return end
-    end
-end
-
 local function ApplySpec(name, spec)
     if not spec then return false end
     local p = PBA.paladins[name]
@@ -288,7 +280,19 @@ local function ApplySpec(name, spec)
     local changed = (p.spec ~= spec)
     p.spec = spec
     CacheSpec(p.unit, spec)
-    if changed then PBA:RecalcHasProt() end
+    -- Прото-бафф может держать только паладин-защитник: снимаем его при смене спека.
+    if spec ~= "Protection" and PBA.assignments["proto"] == name then
+        PBA.assignments["proto"] = nil
+        p.buffs["proto"] = nil
+        if PBA.db and PBA.db.assignments then PBA.db.assignments["proto"] = nil end
+        changed = true
+    elseif spec == "Protection" and not PBA.assignments["proto"]
+        and PBA.db and PBA.db.assignments and PBA.db.assignments["proto"] == name then
+        -- Спек был неизвестен при сборке ростера — применяем сохранённое назначение.
+        p.buffs["proto"] = true
+        PBA.assignments["proto"] = name
+        changed = true
+    end
     return changed
 end
 
@@ -362,13 +366,23 @@ function PBA:UpdateRoster()
         for buffKey, pname in pairs(d.assignments or {}) do
             local p = PBA.paladins[pname]
             if p then
-                p.buffs[buffKey] = true
-                PBA.assignments[buffKey] = pname
+                if buffKey == "proto" then
+                    if p.spec == "Protection" then
+                        p.buffs[buffKey] = true
+                        PBA.assignments[buffKey] = pname
+                    elseif p.spec then
+                        -- Спек известен и это не защитник: назначение недействительно.
+                        d.assignments[buffKey] = nil
+                    end
+                    -- Спек пока неизвестен: назначение остаётся в базе и применится
+                    -- в ApplySpec, когда инспект подтвердит Protection.
+                else
+                    p.buffs[buffKey] = true
+                    PBA.assignments[buffKey] = pname
+                end
             end
         end
     end
-
-    PBA:RecalcHasProt()
 
     local needed = {}
     for _, p in pairs(PBA.paladins) do
@@ -619,15 +633,19 @@ reinspectFrame:SetScript("OnUpdate", function(self, el)
 end)
 
 -- ==================== ASSIGNMENT LOGIC ====================
-function PBA:IsBuffAvailable(buffKey)
-    if buffKey == "proto" and not hasProt then return false end
+-- Бафф доступен конкретному паладину: прото может держать только защитник.
+function PBA:IsBuffAvailable(buffKey, paladinName)
+    if buffKey == "proto" then
+        local p = paladinName and PBA.paladins[paladinName]
+        return (p and p.spec == "Protection") and true or false
+    end
     return true
 end
 
 function PBA:GetAssignableBuffs(forPaladinName)
     local result = {}
     for _, buff in ipairs(BUFF_POOL) do
-        if self:IsBuffAvailable(buff.key) then
+        if self:IsBuffAvailable(buff.key, forPaladinName) then
             local owner = PBA.assignments[buff.key]
             if not owner or owner == forPaladinName then result[#result + 1] = buff.key end
         end
@@ -642,7 +660,7 @@ end
 
 function PBA:AssignBuff(paladinName, buffKey)
     local p = PBA.paladins[paladinName]
-    if not p or not self:IsBuffAvailable(buffKey) then return end
+    if not p or not self:IsBuffAvailable(buffKey, paladinName) then return end
     if p.buffs[buffKey] then
         PBA.assignments[buffKey] = nil; p.buffs[buffKey] = nil
         if PBA.db.assignments then PBA.db.assignments[buffKey] = nil end
@@ -745,7 +763,7 @@ function PBA:Announce()
     for name in pairs(PBA.paladins) do
         local buffs = {}
         for _, buffKey in ipairs(BUFF_KEY_ORDER) do
-            if self:IsBuffAvailable(buffKey) and PBA.assignments[buffKey] == name then
+            if self:IsBuffAvailable(buffKey, name) and PBA.assignments[buffKey] == name then
                 buffs[#buffs + 1] = PBA:FormatBuffNameAnnounce(buffKey)
             end
         end
