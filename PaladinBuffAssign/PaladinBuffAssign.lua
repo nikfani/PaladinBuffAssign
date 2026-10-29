@@ -6,7 +6,7 @@
 local addonName = "PaladinBuffAssign"
 local PBA = {}
 _G[addonName] = PBA
-PBA.version = "3.4.0" -- 3.3.5a: dual-group inspect, GUID resolution, CanInspect
+PBA.version = "3.4.1" -- 3.3.5a: dual-group inspect, GUID resolution, CanInspect
 
 -- ==================== LOCALE ====================
 local L = {}
@@ -20,7 +20,7 @@ if GetLocale() == "ruRU" then
     L.buffNameMode = "Название баффа в меню"
     L.bmIcon = "Иконка"; L.bmShort = "Сокращение"; L.bmFull = "Полное название"
     L.announceNameMode = "Название баффа в объявлении"; L.anShort = "Сокращение"; L.anFull = "Полное название"
-    L.assign = "Назначить бафф"; L.unassign = "Снять все назначения"; L.announce = "Оповестить в рейд"
+    L.assign = "Назначить бафф"; L.unassign = "Снять все назначения"; L.announce = "Объявить"
     L.noPaladins = "Нет паладинов в группе"; L.allAssigned = "Все баффы назначены"
     L.assignedTo = "%s — %s"
     L.loaded = "Загружен. /pba — настройки."
@@ -38,7 +38,7 @@ else
     L.buffNameMode = "Buff name in menu"
     L.bmIcon = "Icon"; L.bmShort = "Short name"; L.bmFull = "Full name"
     L.announceNameMode = "Buff name in announce"; L.anShort = "Short name"; L.anFull = "Full name"
-    L.assign = "Assign buff"; L.unassign = "Unassign all"; L.announce = "Announce to raid"
+    L.assign = "Assign buff"; L.unassign = "Unassign all"; L.announce = "Announce"
     L.noPaladins = "No paladins in group"; L.allAssigned = "All buffs assigned"
     L.assignedTo = "%s — %s"
     L.loaded = "Loaded. Type /pba for options."
@@ -724,6 +724,20 @@ function PBA:GetSpecIcon(spec)
 end
 
 -- ==================== ANNOUNCE ====================
+-- Лидер рейда и помощники могут объявлять через /rw (RAID_WARNING).
+local function CanRaidWarning()
+    if GetNumRaidMembers() == 0 then return false end
+    if type(IsRaidLeader) == "function" then
+        local ok, res = pcall(IsRaidLeader)
+        if ok and res then return true end
+    end
+    if type(IsRaidOfficer) == "function" then
+        local ok, res = pcall(IsRaidOfficer)
+        if ok and res then return true end
+    end
+    return false
+end
+
 function PBA:Announce()
     if not self:AnyBuffAssigned() then return end
 
@@ -744,16 +758,32 @@ function PBA:Announce()
     table.sort(entries, function(a, b) return a.name < b.name end)
 
     local channel = "RAID"
-    if GetNumRaidMembers() == 0 and GetNumPartyMembers() > 0 then channel = "PARTY"
-    elseif GetNumRaidMembers() == 0 and GetNumPartyMembers() == 0 then channel = nil end
+    if GetNumRaidMembers() == 0 then
+        if GetNumPartyMembers() > 0 then channel = "PARTY" else channel = nil end
+    elseif CanRaidWarning() then
+        channel = "RAID_WARNING"
+    end
 
+    local lines = {}
     for _, entry in ipairs(entries) do
-        local line = string.format(L.assignedTo, entry.name, entry.text)
-        if channel then
-            SendChatMessage(line, channel)
-        else
+        lines[#lines + 1] = string.format(L.assignedTo, entry.name, entry.text)
+    end
+
+    if not channel then
+        for _, line in ipairs(lines) do
             DEFAULT_CHAT_FRAME:AddMessage("|cffFF7D0A" .. addonName .. "|r: " .. line)
         end
+        return
+    end
+
+    -- Рейд-предупреждение ограничено по частоте: отправляем всё одной строкой.
+    if channel == "RAID_WARNING" then
+        SendChatMessage(table.concat(lines, " | "), channel)
+        return
+    end
+
+    for _, line in ipairs(lines) do
+        SendChatMessage(line, channel)
     end
 end
 
