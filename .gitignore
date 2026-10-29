@@ -1,0 +1,14 @@
+# OS / редакторы
+Thumbs.db
+Desktop.ini
+*.swp
+*~
+
+# Python (проверка синтаксиса)
+__pycache__/
+*.pyc
+
+# Локальные черновики
+*.bak
+*.tmp
+*.log

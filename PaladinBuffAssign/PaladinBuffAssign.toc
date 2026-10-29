@@ -1,0 +1,14 @@
+## Interface: 30300
+## Title: PaladinBuffAssign
+## Notes: Assign buffs to paladins in group/raid via context menus on bars
+## Author: Nikol
+## Version: 1.0.0
+## SavedVariables: PaladinBuffAssignDB
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibTalentQuery-1.0\LibTalentQuery-1.0.lua
+Libs\LibGroupTalents-1.0\lib.xml
+PaladinBuffAssign.lua
+PaladinBuffAssign_UI.lua
+PaladinBuffAssign_Config.lua
