@@ -474,7 +474,7 @@ function PBA:UpdateAnnounceButton()
         announceBtn:SetText(L.announce)
         announceBtn:SetFrameStrata("DIALOG")
         announceBtn:SetScript("OnClick", function()
-            self:Announce()
+            PBA:Announce()
         end)
         announceBtn:Hide()
     end

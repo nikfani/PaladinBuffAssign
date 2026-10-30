@@ -6,7 +6,7 @@
 local addonName = "PaladinBuffAssign"
 local PBA = {}
 _G[addonName] = PBA
-PBA.version = "3.4.2" -- 3.3.5a: dual-group inspect, GUID resolution, CanInspect
+PBA.version = "3.4.10"
 
 -- ==================== LOCALE ====================
 local L = {}
@@ -20,13 +20,18 @@ if GetLocale() == "ruRU" then
     L.buffNameMode = "Название баффа в меню"
     L.bmIcon = "Иконка"; L.bmShort = "Сокращение"; L.bmFull = "Полное название"
     L.announceNameMode = "Название баффа в объявлении"; L.anShort = "Сокращение"; L.anFull = "Полное название"
+    L.announceChannel = "Канал объявления"
+    L.chAuto = "Авто (RW, иначе RAID)"
+    L.chRaid = "Raid (/raid)"
+    L.chRW   = "Raid Warning (/rw)"
+    L.chLocal = "Только локально"
     L.assign = "Назначить бафф"; L.unassign = "Снять все назначения"; L.announce = "Объявить"
     L.noPaladins = "Нет паладинов в группе"; L.allAssigned = "Все баффы назначены"
-    L.assignedTo = "%s — %s"
+    L.assignedTo = "%s: %s"
     L.loaded = "Загружен. /pba — настройки."
     L.proto = "Прото-бафф"
     L.specUnknown = "Неизв."; L.specHoly = "Свет"; L.specProt = "Защита"; L.specRet = "Воздаяние"
-    L.shortKings = "Каска"; L.shortMight = "Кулак"; L.shortWisdom = "Мудрость"
+    L.shortKings = "Каска"; L.shortMight = "Кулак"; L.shortWisdom = "Крест"
     L.shortSanctuary = "Крест"; L.shortProto = "Прото"
 else
     L.title = "Paladin Buff Assign"
@@ -38,9 +43,14 @@ else
     L.buffNameMode = "Buff name in menu"
     L.bmIcon = "Icon"; L.bmShort = "Short name"; L.bmFull = "Full name"
     L.announceNameMode = "Buff name in announce"; L.anShort = "Short name"; L.anFull = "Full name"
+    L.announceChannel = "Announce channel"
+    L.chAuto = "Auto (RW, else RAID)"
+    L.chRaid = "Raid (/raid)"
+    L.chRW   = "Raid Warning (/rw)"
+    L.chLocal = "Local only"
     L.assign = "Assign buff"; L.unassign = "Unassign all"; L.announce = "Announce"
     L.noPaladins = "No paladins in group"; L.allAssigned = "All buffs assigned"
-    L.assignedTo = "%s — %s"
+    L.assignedTo = "%s: %s"
     L.loaded = "Loaded. Type /pba for options."
     L.proto = "Proto-buff"
     L.specUnknown = "Unknown"; L.specHoly = "Holy"; L.specProt = "Protection"; L.specRet = "Retribution"
@@ -53,7 +63,7 @@ PBA.L = L
 local BUFF_POOL = {
     { key = "kings",  id = 20217, name = GetSpellInfo(20217) or "Blessing of Kings",  icon = "Interface\\Icons\\Spell_Magic_MageArmor",         short = L.shortKings },
     { key = "might",  id = 19838, name = GetSpellInfo(19838) or "Blessing of Might",  icon = "Interface\\Icons\\Spell_Holy_FistOfJustice",      short = L.shortMight },
-    { key = "wisdom", id = 19742, name = GetSpellInfo(19742) or "Blessing of Wisdom", icon = "Interface\\Icons\\Spell_Holy_SealOfWisdom",       short = L.shortSanctuary },
+    { key = "wisdom", id = 19742, name = GetSpellInfo(19742) or "Blessing of Wisdom", icon = "Interface\\Icons\\Spell_Holy_SealOfWisdom",       short = L.shortWisdom },
     { key = "proto",  id = 20911, name = L.proto,                                     icon = "Interface\\Icons\\Spell_nature_lightningshield", short = L.shortProto },
 }
 PBA.BUFF_POOL = BUFF_POOL
@@ -94,10 +104,6 @@ local function GetPlayerSpecViaTalents()
     )
 end
 
--- [FIX 3.4.0] Чтение талантов инспектируемого юнита.
--- В 3.3.5a GetTalentTabInfo(tab, true, nil, nil) может вернуть неактивную
--- группу или нули. Сначала пробуем активную группу через GetActiveTalentGroup(true),
--- затем перебираем обе группы.
 local function GetInspectedSpec()
     local activeGroup = 1
     if GetActiveTalentGroup then
@@ -112,7 +118,6 @@ local function GetInspectedSpec()
         return SpecFromPoints(h, p, r), { h, p, r }, activeGroup
     end
 
-    -- Fallback: перебор обеих групп
     for group = 1, 2 do
         if group ~= activeGroup then
             local gh = GetTalentPoints(1, true, group)
@@ -223,9 +228,10 @@ end
 local DEFAULTS = {
     version = 1, enabled = true, groupOnly = false, minimal = false,
     menuDirection = "right", buffNameMode = "full", announceNameMode = "short",
+    announceChannel = "auto",
     width = 220, height = 32, spacing = 4, scale = 1.0,
     barAlpha = 0.85, menuAlpha = 0.90, locked = true,
-    assignments = {}, point = "CENTER", relPoint = "CENTER", x = 0, y = 0,
+    point = "CENTER", relPoint = "CENTER", x = 0, y = 0,
 }
 
 -- ==================== STATE ====================
@@ -240,12 +246,10 @@ local announceBtn = nil
 local inspectQueue = {}
 local _currentInspect = nil
 
--- [FIX 3.4.0] 15 сек — компромисс для 3.3.5a с учётом троттлинга.
 local REINSPECT_INTERVAL = 15
 local MAX_ATTEMPTS = 10
 
 -- ==================== INSPECT RANGE ====================
--- [FIX 3.4.0] Расширенная проверка: CanInspect + CheckInteractDistance.
 local function IsInspectable(unit)
     if not UnitExists(unit) then return false end
     if not UnitIsConnected(unit) then return false end
@@ -280,15 +284,19 @@ local function ApplySpec(name, spec)
     local changed = (p.spec ~= spec)
     p.spec = spec
     CacheSpec(p.unit, spec)
-    -- Прото-бафф может держать только паладин-защитник: снимаем его при смене спека.
-    if spec ~= "Protection" and PBA.assignments["proto"] == name then
-        PBA.assignments["proto"] = nil
-        p.buffs["proto"] = nil
-        if PBA.db and PBA.db.assignments then PBA.db.assignments["proto"] = nil end
-        changed = true
-    elseif spec == "Protection" and not PBA.assignments["proto"]
+
+    if spec ~= "Protection" then
+        if PBA.assignments["proto"] == name then
+            PBA.assignments["proto"] = nil
+            p.buffs["proto"] = nil
+            changed = true
+        end
+        if PBA.db and PBA.db.assignments and PBA.db.assignments["proto"] == name then
+            PBA.db.assignments["proto"] = nil
+            changed = true
+        end
+    elseif not PBA.assignments["proto"]
         and PBA.db and PBA.db.assignments and PBA.db.assignments["proto"] == name then
-        -- Спек был неизвестен при сборке ростера — применяем сохранённое назначение.
         p.buffs["proto"] = true
         PBA.assignments["proto"] = name
         changed = true
@@ -371,11 +379,8 @@ function PBA:UpdateRoster()
                         p.buffs[buffKey] = true
                         PBA.assignments[buffKey] = pname
                     elseif p.spec then
-                        -- Спек известен и это не защитник: назначение недействительно.
                         d.assignments[buffKey] = nil
                     end
-                    -- Спек пока неизвестен: назначение остаётся в базе и применится
-                    -- в ApplySpec, когда инспект подтвердит Protection.
                 else
                     p.buffs[buffKey] = true
                     PBA.assignments[buffKey] = pname
@@ -446,8 +451,6 @@ local inspectFrame = CreateFrame("Frame")
 inspectFrame:RegisterEvent("INSPECT_TALENT_READY")
 pcall(function() inspectFrame:RegisterEvent("INSPECT_READY") end)
 
--- [FIX 3.4.0] Если arg1 — GUID, ищем во ВСЕХ юнитах группы (не только паладинах),
--- потому что UnitGUID(p.unit) может ещё не совпасть, если PBA.paladins неполон.
 local function ResolveInspectedUnit(arg1)
     if type(arg1) == "string" and #arg1 > 0 then
         if arg1:match("^party%d") or arg1:match("^raid%d") or arg1 == "player" then
@@ -518,24 +521,11 @@ local function TryProcessInspectedUnit(unit)
 end
 
 inspectFrame:SetScript("OnEvent", function(self, event, arg1)
-    if PBA._debugInspect then
-        DEFAULT_CHAT_FRAME:AddMessage("|cff00AAFFPBA event|r " .. tostring(event)
-            .. " arg=" .. tostring(arg1)
-            .. " current=" .. (_currentInspect and _currentInspect.unit or "nil"))
-    end
-
     local unit = ResolveInspectedUnit(arg1)
     if not unit then return end
 
-    -- Защита от nil-arg событий при pending вне радиуса (cross-contamination)
     if not arg1 and _currentInspect and _currentInspect.unit == unit then
-        if not IsInspectable(unit) then
-            if PBA._debugInspect then
-                DEFAULT_CHAT_FRAME:AddMessage("|cffFFAA00PBA|r skip nil-arg event for "
-                    .. tostring(unit) .. " — pending out of range")
-            end
-            return
-        end
+        if not IsInspectable(unit) then return end
     end
 
     local ok = TryProcessInspectedUnit(unit)
@@ -544,10 +534,6 @@ inspectFrame:SetScript("OnEvent", function(self, event, arg1)
         if ok then
             _currentInspect = nil
         else
-            if PBA._debugInspect then
-                DEFAULT_CHAT_FRAME:AddMessage("|cffFFAA00PBA|r inspect for " .. tostring(unit)
-                    .. " returned no data, releasing queue slot")
-            end
             inspectQueue[unit] = nil
             _currentInspect = nil
         end
@@ -561,9 +547,6 @@ inspectFrame:SetScript("OnUpdate", function(self, el)
     if _currentInspect then
         local age = GetTime() - _currentInspect.requestedAt
         if age > 10 then
-            if PBA._debugInspect then
-                DEFAULT_CHAT_FRAME:AddMessage("|cffAA0000PBA|r inspect timeout for " .. _currentInspect.unit)
-            end
             inspectQueue[_currentInspect.unit] = nil
             _currentInspect = nil
         else
@@ -594,16 +577,8 @@ inspectFrame:SetScript("OnUpdate", function(self, el)
             info._rangeLogged = false
             info.attempts = info.attempts + 1
             _currentInspect = { unit = unit, requestedAt = GetTime() }
-            -- [FIX 3.4.0] ClearInspectPlayer перед NotifyInspect — сбрасывает
-            -- stale-данные, чтобы GetTalentTabInfo в OnEvent вернул именно
-            -- этого юнита, а не предыдущего.
             if type(ClearInspectPlayer) == "function" then
                 pcall(ClearInspectPlayer)
-            end
-            if PBA._debugInspect then
-                DEFAULT_CHAT_FRAME:AddMessage("|cff00AAFFPBA NotifyInspect|r " .. unit
-                    .. " (attempt " .. info.attempts
-                    .. (info.recheck and ", recheck" or "") .. ")")
             end
             NotifyInspect(unit)
             return
@@ -633,7 +608,6 @@ reinspectFrame:SetScript("OnUpdate", function(self, el)
 end)
 
 -- ==================== ASSIGNMENT LOGIC ====================
--- Бафф доступен конкретному паладину: прото может держать только защитник.
 function PBA:IsBuffAvailable(buffKey, paladinName)
     if buffKey == "proto" then
         local p = paladinName and PBA.paladins[paladinName]
@@ -697,7 +671,9 @@ function PBA:UnassignAllBuffs(paladinName)
 end
 
 function PBA:AnyBuffAssigned()
-    for _, p in pairs(PBA.paladins) do if next(p.buffs) then return true end end
+    for _, p in pairs(PBA.paladins) do
+        if p.buffs and next(p.buffs) then return true end
+    end
     return false
 end
 
@@ -742,23 +718,47 @@ function PBA:GetSpecIcon(spec)
 end
 
 -- ==================== ANNOUNCE ====================
--- Лидер рейда и помощники могут объявлять через /rw (RAID_WARNING).
-local function CanRaidWarning()
-    if GetNumRaidMembers() == 0 then return false end
-    if type(IsRaidLeader) == "function" then
-        local ok, res = pcall(IsRaidLeader)
-        if ok and res then return true end
+
+local function IsPlayerRaidLeaderOrAssistant()
+    if not GetNumRaidMembers or GetNumRaidMembers() == 0 then
+        return false
     end
-    if type(IsRaidOfficer) == "function" then
+    if IsRaidLeader then
+        local ok, res = pcall(IsRaidLeader)
+        if ok and (res == 1 or res == true) then return true end
+    end
+    if IsRaidOfficer then
         local ok, res = pcall(IsRaidOfficer)
-        if ok and res then return true end
+        if ok and (res == 1 or res == true) then return true end
+    end
+    local myName = UnitName("player")
+    if myName and GetRaidRosterInfo then
+        for i = 1, GetNumRaidMembers() do
+            local name, rank = GetRaidRosterInfo(i)
+            if name == myName and rank and rank >= 1 then
+                return true
+            end
+        end
+    end
+    if UnitIsGroupLeader then
+        local ok, res = pcall(UnitIsGroupLeader, "player")
+        if ok and (res == 1 or res == true) then return true end
+    end
+    if UnitIsGroupAssistant then
+        local ok, res = pcall(UnitIsGroupAssistant, "player")
+        if ok and (res == 1 or res == true) then return true end
     end
     return false
 end
 
-function PBA:Announce()
-    if not self:AnyBuffAssigned() then return end
+-- Одиночный | в тексте — escape-префикс WoW, из-за него SendChatMessage
+-- бросает "Invalid escape code". Заменяем на '!', если встретился.
+local function SanitizeLine(s)
+    if not s then return s end
+    return (s:gsub("|([^cCrHh])", "!%1"))
+end
 
+function PBA:BuildAnnounceLines()
     local entries = {}
     for name in pairs(PBA.paladins) do
         local buffs = {}
@@ -771,37 +771,90 @@ function PBA:Announce()
             entries[#entries + 1] = { name = name, text = table.concat(buffs, ", ") }
         end
     end
-
-    if #entries == 0 then return end
     table.sort(entries, function(a, b) return a.name < b.name end)
-
-    local channel = "RAID"
-    if GetNumRaidMembers() == 0 then
-        if GetNumPartyMembers() > 0 then channel = "PARTY" else channel = nil end
-    elseif CanRaidWarning() then
-        channel = "RAID_WARNING"
-    end
-
     local lines = {}
     for _, entry in ipairs(entries) do
-        lines[#lines + 1] = string.format(L.assignedTo, entry.name, entry.text)
+        local line = string.format(L.assignedTo, entry.name, entry.text)
+        lines[#lines + 1] = SanitizeLine(line)
     end
+    return lines
+end
 
-    if not channel then
+function PBA:Announce()
+    if not self:AnyBuffAssigned() then return end
+
+    local lines = self:BuildAnnounceLines()
+    if #lines == 0 then return end
+
+    local inRaid  = (GetNumRaidMembers()  > 0) or UnitExists("raid1")
+    local inParty = (GetNumPartyMembers() > 0) or UnitExists("party1")
+    local channelPref = (self.db and self.db.announceChannel) or "auto"
+
+    if not inRaid and not inParty then
         for _, line in ipairs(lines) do
             DEFAULT_CHAT_FRAME:AddMessage("|cffFF7D0A" .. addonName .. "|r: " .. line)
         end
         return
     end
 
-    -- Рейд-предупреждение ограничено по частоте: отправляем всё одной строкой.
-    if channel == "RAID_WARNING" then
-        SendChatMessage(table.concat(lines, " | "), channel)
+    if channelPref == "local" then
+        for _, line in ipairs(lines) do
+            DEFAULT_CHAT_FRAME:AddMessage("|cffFF7D0A" .. addonName .. "|r: " .. line)
+        end
         return
     end
 
+    -- RAID_WARNING — если возможно и включено/авто.
+    if inRaid and IsPlayerRaidLeaderOrAssistant()
+        and (channelPref == "rw" or channelPref == "auto") then
+        -- Отправляем ВСЕ строки сразу, без задержки, каждая — на своей строке.
+        for _, line in ipairs(lines) do
+            SendChatMessage(line, "RAID_WARNING")
+        end
+        return
+    end
+
+    -- RAID / PARTY — все строки сразу.
+    local channel = inRaid and "RAID" or "PARTY"
     for _, line in ipairs(lines) do
         SendChatMessage(line, channel)
+    end
+end
+
+function PBA:AnnounceTest()
+    local lines = self:BuildAnnounceLines()
+    if #lines == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffFF7D0A" .. addonName .. "|r announcetest: buffs not assigned")
+        return
+    end
+    local inRaid  = (GetNumRaidMembers()  > 0) or UnitExists("raid1")
+    local inParty = (GetNumPartyMembers() > 0) or UnitExists("party1")
+    local canRW = IsPlayerRaidLeaderOrAssistant()
+    local pref = (self.db and self.db.announceChannel) or "auto"
+
+    DEFAULT_CHAT_FRAME:AddMessage("|cffFF7D0A" .. addonName .. "|r announcetest:")
+    DEFAULT_CHAT_FRAME:AddMessage("  inRaid=" .. tostring(inRaid)
+        .. " inParty=" .. tostring(inParty)
+        .. " canRW=" .. tostring(canRW)
+        .. " pref=" .. pref
+        .. " lines=" .. #lines)
+
+    local plan
+    if pref == "local" then
+        plan = "local chat (forced)"
+    elseif inRaid then
+        local useRW = canRW and (pref == "rw" or pref == "auto")
+        if useRW then plan = "RAID_WARNING, " .. #lines .. " lines instantly"
+        else plan = "RAID, " .. #lines .. " lines instantly" end
+    elseif inParty then
+        plan = "PARTY, " .. #lines .. " lines instantly"
+    else
+        plan = "local chat"
+    end
+    DEFAULT_CHAT_FRAME:AddMessage("  channel: " .. plan)
+
+    for i, line in ipairs(lines) do
+        DEFAULT_CHAT_FRAME:AddMessage("  [" .. i .. "] (" .. #line .. "b) " .. line)
     end
 end
 
@@ -848,13 +901,16 @@ function PBA:InitDB()
     if type(d) ~= "table" then d = {} end
     if d.version ~= DEFAULTS.version then
         local pt, rp, px, py = d.point, d.relPoint, d.x, d.y
+        local savedAssign = d.assignments
         wipe(d)
         for k, v in pairs(DEFAULTS) do d[k] = v end
         d.point = pt or DEFAULTS.point; d.relPoint = rp or DEFAULTS.relPoint
         d.x = px or DEFAULTS.x; d.y = py or DEFAULTS.y
         d.version = DEFAULTS.version
+        if type(savedAssign) == "table" then d.assignments = savedAssign end
     end
     for k, v in pairs(DEFAULTS) do if d[k] == nil then d[k] = v end end
+    if type(d.assignments) ~= "table" then d.assignments = {} end
     PaladinBuffAssignDB = d
     PBA.db = d
 end
@@ -917,7 +973,46 @@ SlashCmdList["PALADINBUFFASSIGN"] = function(msg)
         DEFAULT_CHAT_FRAME:AddMessage("|cffFF7D0A" .. addonName .. "|r: unlocked")
     elseif msg == "reset" then
         PaladinBuffAssignDB = nil; ReloadUI()
-    elseif msg == "announce" then PBA:Announce()
+    elseif msg == "announce" then
+        PBA:Announce()
+    elseif msg == "announcetest" then
+        PBA:AnnounceTest()
+    elseif msg == "whoami" then
+        local inRaid = (GetNumRaidMembers() or 0) > 0
+        local inParty = (GetNumPartyMembers() or 0) > 0
+        local isLeader, isOfficer = false, false
+        if IsRaidLeader then
+            local ok, res = pcall(IsRaidLeader)
+            if ok and (res == 1 or res == true) then isLeader = true end
+        end
+        if IsRaidOfficer then
+            local ok, res = pcall(IsRaidOfficer)
+            if ok and (res == 1 or res == true) then isOfficer = true end
+        end
+        local rank = 0
+        local myName = UnitName("player")
+        if inRaid and GetRaidRosterInfo and myName then
+            for i = 1, GetNumRaidMembers() do
+                local n, r = GetRaidRosterInfo(i)
+                if n == myName then rank = r or 0; break end
+            end
+        end
+        local canRW = IsPlayerRaidLeaderOrAssistant()
+        local willUse = "local chat"
+        if inRaid then
+            willUse = canRW and "RAID_WARNING (/rw)" or "RAID (/raid)"
+        elseif inParty then
+            willUse = "PARTY"
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("|cffFF7D0A" .. addonName .. "|r whoami:")
+        DEFAULT_CHAT_FRAME:AddMessage("  raid=" .. tostring(inRaid)
+            .. " party=" .. tostring(inParty)
+            .. " IsRaidLeader=" .. tostring(isLeader)
+            .. " IsRaidOfficer=" .. tostring(isOfficer)
+            .. " rosterRank=" .. tostring(rank))
+        DEFAULT_CHAT_FRAME:AddMessage("  Can use RAID_WARNING: " .. tostring(canRW))
+        DEFAULT_CHAT_FRAME:AddMessage("  Channel preference: " .. tostring(PBA.db.announceChannel))
+        DEFAULT_CHAT_FRAME:AddMessage("  Next announce channel: " .. willUse)
     elseif msg == "inspectdebug" then
         PBA._debugInspect = not PBA._debugInspect
         DEFAULT_CHAT_FRAME:AddMessage("|cffFF7D0A" .. addonName .. "|r inspect debug: "
@@ -945,42 +1040,17 @@ SlashCmdList["PALADINBUFFASSIGN"] = function(msg)
         f(DEFAULT_CHAT_FRAME, "  LibStub: " .. (LibStub and "OK" or "MISSING"))
         f(DEFAULT_CHAT_FRAME, "  LibTalentQuery-1.0: " .. (LibTalentQuery and "OK" or "MISSING"))
         f(DEFAULT_CHAT_FRAME, "  LibGroupTalents-1.0: " .. (LibGroupTalents and "OK" or "MISSING"))
+        f(DEFAULT_CHAT_FRAME, "  announceChannel: " .. tostring(PBA.db.announceChannel))
         local qcount = 0
         for _ in pairs(inspectQueue) do qcount = qcount + 1 end
         local ccache = 0
         for _ in pairs(PBA.specCache) do ccache = ccache + 1 end
         f(DEFAULT_CHAT_FRAME, "  inspect queue: " .. qcount
             .. "  current: " .. (_currentInspect and _currentInspect.unit or "nil")
-            .. "  specCache: " .. ccache
-            .. "  reinspect: " .. REINSPECT_INTERVAL .. "s"
-            .. "  debugInspect: " .. tostring(PBA._debugInspect))
-        f(DEFAULT_CHAT_FRAME, "  spellbook: " .. tostring(ScanSpellbookForSpec()))
-        f(DEFAULT_CHAT_FRAME, "  activeGroup: " .. tostring(GetActiveTalentGroup and GetActiveTalentGroup(false)))
-        for g = 1, 2 do
-            local x = GetTalentPoints(1, false, g)
-            local y = GetTalentPoints(2, false, g)
-            local z = GetTalentPoints(3, false, g)
-            f(DEFAULT_CHAT_FRAME, "  group" .. g .. ": " .. x .. "/" .. y .. "/" .. z)
-        end
+            .. "  specCache: " .. ccache)
         for name, p in pairs(PBA.paladins) do
-            local pts = "?"
-            if p.lastPoints then
-                pts = p.lastPoints[1] .. "/" .. p.lastPoints[2] .. "/" .. p.lastPoints[3]
-            end
-            local age = p.lastInspect and string.format("%ds", math.floor(GetTime() - p.lastInspect)) or "never"
-            local inRange = "?"
-            local canIns = "?"
-            if CheckInteractDistance then
-                local ok, res = pcall(CheckInteractDistance, p.unit, 4)
-                if ok then inRange = tostring(res) end
-            end
-            if CanInspect then
-                local ok, res = pcall(CanInspect, p.unit)
-                if ok then canIns = tostring(res) end
-            end
             f(DEFAULT_CHAT_FRAME, "  " .. name .. " (" .. tostring(p.unit) .. ") → "
-                .. tostring(p.spec) .. "  [pts: " .. pts .. ", last: " .. age
-                .. ", inRange: " .. inRange .. ", canInspect: " .. canIns .. "]")
+                .. tostring(p.spec))
         end
     else
         PBA:ToggleConfig()
