@@ -32,7 +32,7 @@ if GetLocale() == "ruRU" then
     L.proto = "Прото-бафф"
     L.specUnknown = "Неизв."; L.specHoly = "Свет"; L.specProt = "Защита"; L.specRet = "Воздаяние"
     L.shortKings = "Каска"; L.shortMight = "Кулак"; L.shortWisdom = "Крест"
-    L.shortSanctuary = "Крест"; L.shortProto = "Прото"
+    L.shortProto = "Прото"
 else
     L.title = "Paladin Buff Assign"
     L.enabled = "Enable"; L.groupOnly = "Only in group/raid"
@@ -55,7 +55,7 @@ else
     L.proto = "Proto-buff"
     L.specUnknown = "Unknown"; L.specHoly = "Holy"; L.specProt = "Protection"; L.specRet = "Retribution"
     L.shortKings = "Kings"; L.shortMight = "Might"; L.shortWisdom = "Wisdom"
-    L.shortSanctuary = "Sanct."; L.shortProto = "Proto"
+    L.shortProto = "Proto"
 end
 PBA.L = L
 
